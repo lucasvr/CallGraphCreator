@@ -92,7 +92,7 @@ class CallGraphCreator:
 
 		if self.verbose: print("Compilng c++ file to create the first dot file")
 		cclang = 'clang++ -std=c++11 -S -emit-llvm ' + includes + ' ' + cpp_file + ' -o -'
-		cllvm = 'opt -analyze -dot-callgraph' 
+		cllvm = 'opt -enable-new-pm=0 -dot-callgraph'
 		pc = subprocess.Popen(cclang.split(), stdout=subprocess.PIPE)
 		pl = subprocess.Popen(cllvm.split(),  stdin=pc.stdout, stdout=subprocess.PIPE)
 		pc.stdout.close()
