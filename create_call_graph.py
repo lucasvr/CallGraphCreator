@@ -65,26 +65,31 @@ def getNamesList(line):
 
 
 class CallGraphCreator:
+	add_reg_exp = -1
+	add_policy = []
 	rm_policy = []
-	reg_exp = -1
+	rm_reg_exp = -1
 	rm_params = False
 	rm_template = False
 	rm_disconnected = False
 	verbose = False
+	target_names = []
+	direct_connect_names = []
 
 	def create(self, args):
 		self.rm_template = args.remove_template
 		self.rm_disconnected = args.remove_disconnected
 		self.verbose = args.verbose
+		self.setAddKeywork(args.add_keywords)
 		self.setRmKeywork(args.regex, args.remove_keywords)
 		if args.dot_file == None:
-			self.createDot(args.cpp_file, args.include_dirs)
 			args.dot_file = 'callgraph.dot'
+			self.createDot(args.cpp_file, args.include_dirs, args.dot_file)
 		
 		self.simplifyDot(args.dot_file, args.pdf)
 
 
-	def createDot(self, cpp_file, include_dirs):
+	def createDot(self, cpp_file, include_dirs, dot_file):
 		includes = ''
 		if include_dirs != None:
 			for dir in include_dirs.split(','):
@@ -97,18 +102,39 @@ class CallGraphCreator:
 		pl = subprocess.Popen(cllvm.split(),  stdin=pc.stdout, stdout=subprocess.PIPE)
 		pc.stdout.close()
 		output = pl.communicate()[0]
+		if os.path.exists(f'<stdin>.{dot_file}'):
+			os.rename(f"<stdin>.{dot_file}", dot_file)
+
+	def setAddKeywork(self, keywords):
+		if keywords != None:
+			kws = keywords.split(',')
+			reg_exp_str = '('
+			for i, w in enumerate(kws):
+				self.add_policy.append(w)
+				reg_exp_str += w
+				if i < len(kws)-1:
+					reg_exp_str += '|'
+			reg_exp_str += ')'
+			self.add_reg_exp = re.compile(reg_exp_str)
+			print(reg_exp_str)
 
 	def setRmKeywork(self, reguar_expression, keywords):
 		if reguar_expression:
-			self.reg_exp = re.compile(reguar_expression)
+			self.rm_reg_exp = re.compile(reguar_expression)
 
 		if keywords != None:
 			for w in keywords.split(','):
 				self.rm_policy.append(w)
 
-	def discard(self, label):
-		if self.reg_exp != -1:
-			if self.reg_exp.search(label) == None:
+	def discard(self, graph_targets, label):
+		if len(self.add_policy):
+			if label in graph_targets.keys():
+				print(f'-> {label} is in target list')
+				return False
+			return True
+
+		if self.rm_reg_exp != -1:
+			if self.rm_reg_exp.search(label) == None:
 				return True
 
 		for policy in self.rm_policy:
@@ -117,36 +143,45 @@ class CallGraphCreator:
 			
 		return False
 
-	
 	def simplifyParameter(self, line):	
-		#if not 'label="{' in line:
-		#	return line
-		if self.rm_params:
-			return line.split('(')[0] + '}\n"'
+		pattern = '\(.*\)'
+		return re.sub(pattern, '()', line)
 
-		if self.rm_template:
-			#check for shared_ptr or unique_ptr in that case skip
-			if 'shared_ptr' in line or 'unique_ptr' in line:
-				line = line.replace('<','[')
-				line = line.replace('>',']')
-			else:
-				while True:
-					id1 = line.find('<')
-					id2 = line.find('>')
-					if id1 > 0 and id2 > 0:
-						opennum = line.count('<', id1+1, id2)
-						for i in range(opennum):
-							id2 = line.find('>', id2+1)
+	def populateKeepList(self, graph, label):
+		graph_nodes = graph.get_nodes()
+		graph_edges = graph.get_edges()
+		quoted_label = pydot.quote_if_necessary(label)
 
-						line = line[0:id1] + line[id2+1:]
-					else:
-						break
-		else:
-			line = line.replace('<','__')
-			line = line.replace('>','__')
-		
-		return line
+		# Retrieve node by label
+		label_dict = dict([(n.obj_dict["attributes"]["label"], n) for n in graph_nodes])
+		target_node_name = label_dict[quoted_label].obj_dict["name"]
 
+		# Retrieve node by name
+		name_dict = dict([(n.obj_dict["name"], n) for n in graph_nodes])
+
+		# Prepare list of target nodes and of direct connections for pretty plotting purposes
+		self.target_names.append(quoted_label)
+		for edge in [e for e in graph_edges if e.get_destination() == target_node_name]:
+			src_name = edge.get_source()
+			label = name_dict[src_name].obj_dict["attributes"]["label"]
+			self.direct_connect_names.append(label)
+
+		# Visit the head node
+		visited = set()
+		visited.add(name_dict[target_node_name])
+		dest_stack = [target_node_name]
+
+		while len(dest_stack):
+			dest_name = dest_stack[0]
+			for edge in [e for e in graph_edges if e.get_destination() == dest_name]:
+				src_name = edge.get_source()
+				node = name_dict[src_name]
+				if node not in dest_stack and node not in visited:
+					dest_stack.append(node.obj_dict["name"])
+				visited.add(node)
+			dest_stack = dest_stack[1:]
+
+		return visited
 
 	def simplifyDot(self, in_dot_file, out_pdf):
 		
@@ -158,34 +193,30 @@ class CallGraphCreator:
 		pf = subprocess.Popen(cfilt.split(), stdin=pc.stdout, stdout=subprocess.PIPE)
 		pc.stdout.close()
 		newdot = pf.communicate()[0].decode('utf-8')
-		
-		if self.verbose: print("Looking for node to be remved")
-		rm_nodes = set()
-		#for line in indot:
+
+		graph = pydot.graph_from_dot_data(newdot)[0]
+		graph_nodes = graph.get_nodes()
+
+		if self.verbose: print("Looking for node to be removed")
+		keep_list = set()
 		for line in newdot.split('\n'):
 			label = getLabel(line)
-			# Search for node name
-			if label and self.discard(label):
-				name = getNamesList(line)[0]
-				rm_nodes.add(name)
+			if label and self.add_reg_exp.search(label):
+				if self.verbose: print(f"Processing target node: {label}")
+				tmp = self.populateKeepList(graph, label)
+				keep_list = set(list(keep_list) + list(tmp))
 
-		print("Going to remove: ", len(rm_nodes))
-		if self.verbose: print("Removing node in ban list")
-		
-		#for line in indot:
+		keep_labels = [n.obj_dict["attributes"]["label"] for n in keep_list]
 		newnewdot = ''
 		for line in newdot.split('\n'):
-			remove = False
-			names = getNamesList(line)
-			for name in names:
-				if name in rm_nodes:
-					remove = True
-					break
+			label = pydot.quote_if_necessary(getLabel(line))
+			if not label or label in keep_labels:
 				newnewdot += line
+		if self.verbose: print("Removed {} nodes out of {}".format(
+			len(graph_nodes)-len(keep_labels), len(graph_nodes)))
 		
-		graph = pydot.graph_from_dot_data(newnewdot)[0]
-
 		if self.verbose: print("Removing edges between nodes without label")
+		graph = pydot.graph_from_dot_data(newnewdot)[0]
 		for edge in graph.get_edge_list():
 			source = edge.get_source()
 			dest = edge.get_destination()
@@ -194,14 +225,20 @@ class CallGraphCreator:
 			if len(snode) == 0 or len(dnode) == 0:
 				graph.del_edge(source, dest)
 
-		if self.verbose: print("Simplifying labels")
+		if self.verbose: print("Reconfiguring nodes and labels")
 		for node in graph.get_node_list():
+			if node.get_label() in self.target_names:
+				node.set_style("filled")
+				node.set_fillcolor("khaki")
+			elif node.get_label() in self.direct_connect_names:
+				node.set_style("filled")
+				node.set_fillcolor("moccasin")
 			node.set_label(self.simplifyParameter(node.get_label()))
 
 		if self.verbose: print("#nodes: ", len(graph.get_node_list()))
 		if self.verbose: print('#edges: ', len(graph.get_edge_list()))
 
-		if self.verbose: print("printing to pdf")
+		if self.verbose: print("Printing to pdf")
 		graph.set('rankdir','TD')
 		graph.set_suppress_disconnected(self.rm_disconnected)
 		graph.set_strict(True)
@@ -216,6 +253,7 @@ if __name__ == '__main__':
 	parser.add_argument('-I','--include_dirs',   help='The directories containing the include files needed to compile the source file, separated by a comma (,)')
 	parser.add_argument('-d','--dot_file',		 help='If you already have a dot file and you want to simplify it instead of creating from a c++ file')
 	parser.add_argument('-o','--pdf',  		     help='The name of the pdf where to store the graph')
+	parser.add_argument('-a','--add_keywords',   help='List of keywords that if found in the label will cause the node to be included. Specify multiple word separated by a comma (,) (default: *)')
 	parser.add_argument('-r','--remove_keywords',help='List of keywords that if found in the label will cause the node to be discarderd. Specify multiple word separated by a comma (,)')
 	parser.add_argument('-e','--regex',          help='Regular expression that determines wheter every node has valid labels to be kept in the final graph.')
 	parser.add_argument('-p','--remove_parameter',   dest='remove_parameter',   action='store_true',help='Remove the parameter from the function definition in the nodes label')
