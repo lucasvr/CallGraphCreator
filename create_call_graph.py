@@ -1,4 +1,4 @@
-#! /usr/bin/env python
+#! /usr/bin/env python3
 #***********************************************************
 #* Software License Agreement (BSD License)
 #*
@@ -40,7 +40,6 @@ import os
 import subprocess
 import pydot
 import string
-import sets
 import argparse
 import time
 import re
@@ -91,7 +90,7 @@ class CallGraphCreator:
 			for dir in include_dirs.split(','):
 				includes = includes + '-I' + dir + ' '
 
-		if self.verbose: print "Compilng c++ file to create the first dot file"
+		if self.verbose: print("Compilng c++ file to create the first dot file")
 		cclang = 'clang++ -std=c++11 -S -emit-llvm ' + includes + ' ' + cpp_file + ' -o -'
 		cllvm = 'opt -analyze -dot-callgraph' 
 		pc = subprocess.Popen(cclang.split(), stdout=subprocess.PIPE)
@@ -158,10 +157,10 @@ class CallGraphCreator:
 		pc = subprocess.Popen(ccat.split(),  stdout=subprocess.PIPE)
 		pf = subprocess.Popen(cfilt.split(), stdin=pc.stdout, stdout=subprocess.PIPE)
 		pc.stdout.close()
-		newdot = pf.communicate()[0]
+		newdot = pf.communicate()[0].decode('utf-8')
 		
-		if self.verbose: print "Looking for node to be remved"
-		rm_nodes = sets.Set()
+		if self.verbose: print("Looking for node to be remved")
+		rm_nodes = set()
 		#for line in indot:
 		for line in newdot.split('\n'):
 			label = getLabel(line)
@@ -170,8 +169,8 @@ class CallGraphCreator:
 				name = getNamesList(line)[0]
 				rm_nodes.add(name)
 
-		print "Going to remove: ", len(rm_nodes)
-		if self.verbose: print "Removing node in ban list"
+		print("Going to remove: ", len(rm_nodes))
+		if self.verbose: print("Removing node in ban list")
 		
 		#for line in indot:
 		newnewdot = ''
@@ -184,9 +183,9 @@ class CallGraphCreator:
 					break
 				newnewdot += line
 		
-		graph = pydot.graph_from_dot_data(newnewdot)
+		graph = pydot.graph_from_dot_data(newnewdot)[0]
 
-		if self.verbose: print "Removing edges between nodes without label"
+		if self.verbose: print("Removing edges between nodes without label")
 		for edge in graph.get_edge_list():
 			source = edge.get_source()
 			dest = edge.get_destination()
@@ -195,14 +194,14 @@ class CallGraphCreator:
 			if len(snode) == 0 or len(dnode) == 0:
 				graph.del_edge(source, dest)
 
-		if self.verbose: print "Simplifying labels"
+		if self.verbose: print("Simplifying labels")
 		for node in graph.get_node_list():
 			node.set_label(self.simplifyParameter(node.get_label()))
 
-		if self.verbose: print "#nodes: ", len(graph.get_node_list())
-		if self.verbose: print '#edges: ', len(graph.get_edge_list())
+		if self.verbose: print("#nodes: ", len(graph.get_node_list()))
+		if self.verbose: print('#edges: ', len(graph.get_edge_list()))
 
-		if self.verbose: print "printing to pdf"
+		if self.verbose: print("printing to pdf")
 		graph.set('rankdir','TD')
 		graph.set_suppress_disconnected(self.rm_disconnected)
 		graph.set_strict(True)
